@@ -31,35 +31,21 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
 ### 应用配置文件
 作为本博客科学上网系列的续篇，本文将在客户端使用到[前篇](https://di-gigen.github.io/2024/11/21/caddy-sni-with-reality/)部署的xray代理节点，故模板中的`MY_SERVER_IP`、`MY_UUID`、`MY_PUBLIC_KEY`需要和服务端配置文件内容相匹配。  
 <details>
-<summary><font color="#E02222">/containers/appdata/singbox/config.json</font></summary>
+<summary><font color="#E02222">/containers/appdata/singbox/config.json (v1.11.x)</font></summary>
 
 ```json
 {
-    "experimental": {
-        "cache_file": {
-            "enabled": true,
-            "path": "cache.db",
-            "store_fakeip": true
-        },
-        "clash_api": {
-            "external_ui": "ui",
-            "external_controller": "0.0.0.0:80",
-            "external_ui_download_detour": "Proxy",
-            "default_mode": "rule"
-        }
-    },
     "log": {
-        "disabled": false,
         "level": "error",
         "timestamp": true
     },
     "dns": {
         "servers": [
             {
-                "tag": "remote-dns",
-                "address": "https://one.one.one.one/dns-query",
+                "tag": "recursive-dns",
+                "address": "https://1.1.1.1/dns-query",
                 "address_resolver": "resolver-dns",
-                "detour": "Proxy"
+                "detour": "proxy"
             },
             {
                 "tag": "resolver-dns",
@@ -67,47 +53,46 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
                 "detour": "direct"
             },
             {
-                "tag": "fakeip-dns",
+                "tag": "remote-dns",
                 "address": "fakeip"
-            },
-            {
-                "tag": "block-dns",
-                "address": "rcode://success"
             }
         ],
         "rules": [
             {
                 //解析节点域名
                 "outbound": "any",
+                "action": "route",
                 "server": "resolver-dns"
             },
             {
                 //DNS去广告(类adguard)
                 "rule_set": ["geosite-category-ads-all"],
-                "server": "block-dns"
+                "action": "reject"
             },
             {
                 "type": "logical",
                 "mode": "or",
                 "rules": [
-                    {"domain_suffix": ["msftconnecttest.com"]},  //修复FakeIP模式下Windows联网状态显示异常
-                    {"rule_set": ["geosite-cn"]}
+                    {"rule_set": ["geosite-cn"]},
+                    {"domain_suffix": ["msftconnecttest.com"]}  //修复FakeIP模式下Windows联网状态显示异常
                 ],
+                "action": "route",
                 "server": "resolver-dns"
             },
             {
                 "query_type": ["A"],
-                "rewrite_ttl": 1,
-                "server": "fakeip-dns"
+                "action": "route",
+                "server": "remote-dns",
+                "rewrite_ttl": 1
             }
         ],
-        "final": "remote-dns",
-        "strategy": "ipv4_only",
-        "client_subnet": "NEIGHBOUR_IP",  //填入一个属地IP，让DNS就近解析接入点
         "fakeip": {
             "enabled": true,
             "inet4_range": "198.18.0.0/15"
-        }
+        },
+        "final": "recursive-dns",
+        "strategy": "ipv4_only",
+        "client_subnet": "NEIGHBOUR_IP"  //填入一个属地IP，让DNS就近解析接入点
     },
     "inbounds": [
         {
@@ -116,12 +101,13 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
             "address": ["172.19.0.1/30"],
             "stack": "gvisor",  //用户协议栈效率更高
             "auto_route": true,
-            "sniff": true,  //嗅探协议类型和域名
-            "sniff_override_destination": true  //目标IP覆写为域名，在服务端进行DNS解析
+            "sniff": true,
+            "sniff_override_destination": true
         },
         {
             "tag": "dns-in",
             "type": "direct",
+            "network": "udp",
             "listen": "::",
             "listen_port": 53,
             "sniff": true
@@ -129,7 +115,7 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
     ],
     "outbounds": [
         {
-            "tag": "Proxy",
+            "tag": "proxy",
             "outbounds": ["auto","VPS节点01","VPS节点02","direct"],
             "default": "auto",
             "type": "selector",
@@ -138,14 +124,6 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
         {
             "tag": "direct",
             "type": "direct"
-        },
-        {
-            "tag": "dns-out",
-            "type": "dns"
-        },
-        {
-            "tag": "block",
-            "type": "block"
         },
         {
             //节点优选(5分钟频度检测比较延迟)
@@ -183,6 +161,29 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
         }
     ],
     "route": {
+        "rules": [
+            {
+                "protocol": "dns",
+                "action": "hijack-dns"
+            },
+            {
+                "rule_set": ["geosite-category-ads-all"],
+                "action": "reject"
+            },
+            {
+                //访问局域网地址、BT下载、访问中国大陆地址走直连
+                "type": "logical",
+                "mode": "or",
+                "rules": [
+                    {"ip_is_private": true},
+                    {"protocol": ["bittorrent"]},
+                    {"rule_set": ["geoip-cn","geosite-cn",]}
+                ],
+                "outbound": "direct"
+            }
+        ],
+        "auto_detect_interface": true,
+        "final": "proxy",
         "rule_set": [
             {
                 "tag": "geoip-cn",
@@ -208,30 +209,19 @@ container mounts add dst=/root/sing-box name=singbox_persist src=/containers/app
                 "update_interval": "1d",
                 "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-ads-all.srs"
             }
-        ],
-        "rules": [
-            {
-                "type": "logical",
-                "mode": "or",
-                "rules": [{"inbound": "dns-in"},{"protocol": "dns"}],
-                "outbound": "dns-out"
-            },
-            {
-                "type": "logical",
-                "mode": "or",
-                "rules": [{"rule_set": ["geosite-category-ads-all"]}],
-                "outbound": "block"
-            },
-            {
-                //访问局域网地址、BT下载、访问中国大陆地址走直连
-                "type": "logical",
-                "mode": "or",
-                "rules": [{"ip_is_private": true},{"protocol": ["bittorrent"]},{"rule_set": ["geoip-cn","geosite-cn",]}],
-                "outbound": "direct"
-            }
-        ],
-        "auto_detect_interface": true,
-        "final": "Proxy"
+        ]
+    },
+    "experimental": {
+        "cache_file": {
+            "enabled": true,
+            "store_fakeip": true
+        },
+        "clash_api": {
+            "external_ui": "ui",
+            "external_controller": "0.0.0.0:80",
+            "external_ui_download_detour": "Proxy",
+            "default_mode": "rule"
+        }
     }
 }
 ```

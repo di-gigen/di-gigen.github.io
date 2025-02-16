@@ -143,7 +143,7 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
 要使用该模板，您需要补全`MY_UUID`。此外服务端与客户端使用的密匙对`MY_PUBLIC_KEY`与`MY_PRIVATE_KEY`，需要使用xray程序文件执行命令`xray x25519 [-i "(base64.RawURLEncoding)" --std-encoding ]`生成，这对于使用sing-box作为后端的我们是一个额外的小麻烦。  
 
 <details>
-<summary><font color="#E02222">/etc/singbox/config.json</font></summary>
+<summary><font color="#E02222">/etc/singbox/config.json (v1.11.x)</font></summary>
 
 ```json
 {
@@ -154,11 +154,10 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
         "timestamp": true
     },
     "inbounds": [{
-        "tag": "reality-in",
+        "tag": "real-in",
         "type": "vless",
         "listen": "::",
         "listen_port": 7893,
-        "sniff": true,
         "users": [{
             "uuid": "MY_UUID",
             "flow": "xtls-rprx-vision"
@@ -188,6 +187,24 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
         }
     ],
     "route": {
+        "rules": [
+            {
+                "inbound": ["real-in"],
+                "action": "sniff"
+            },
+            {
+                "type": "logical",
+                "mode": "or",
+                "rules": [
+                    {"ip_is_private": true},
+                    {"protocol": ["bittorrent"]},
+                    {"rule_set": ["geoip-cn","geosite-cn"]}
+                ],
+                "action": "reject",
+                "method": "drop"
+            }
+        ],
+        "final": "direct",
         "rule_set": [
             {
                 "type": "remote",
@@ -203,21 +220,13 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
                 "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.srs",
                 "download_detour": "direct"
             }
-        ],
-        "rules": [{
-            "type": "logical",
-            "mode": "or",
-            "rules": [{"rule_set": ["geoip-cn","geosite-cn"]},{"ip_is_private": true},{"protocol": ["bittorrent"]}],
-            "invert": false,
-            "outbound": "block"
-        }],
-        "final": "direct"
+        ]
     }
 }
 ```
 </details>
 
-此配置文件语法适配sing-box v1.10.x，若您使用不同的版本，请结合[官方文档](https://sing-box.sagernet.org/)酌情修改。与Caddy相似的，sing-box也需要预先创建日志文件`/your/log/path/box.log`以避免初启动报错。  
+若您使用不同的版本，请结合[官方文档](https://sing-box.sagernet.org/)酌情修改。与Caddy相似的，sing-box也需要预先创建日志文件`/your/log/path/box.log`以避免初启动报错。  
 
 #### 客户端配置
 因不同平台客户端配置方式各异，此处仅展示节点分享链。您需要补全与`config.json`文件中相同的`MY_UUID`、服务器的实际IP`MY_SERVER_IP`、与服务端 `MY_PRIVATE_KEY`成对的公钥`MY_PUBLIC_KEY`。  

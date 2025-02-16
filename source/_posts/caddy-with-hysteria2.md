@@ -48,7 +48,6 @@ Caddy的[安装](https://caddyserver.com/docs/install)过程不再赘述。原�
         "type": "hysteria2",
         "listen": "::",
         "listen_port": 8443,
-        "sniff": true,
         "ignore_client_bandwidth": true,
         "masquerade": "http://localhost:8080",
         "users": [{
@@ -63,7 +62,15 @@ Caddy的[安装](https://caddyserver.com/docs/install)过程不再赘述。原�
         }
     }],
     "outbounds": [...],
-    "route": {...}
+    "route": {
+        "rules": [ 
+            {
+                "inbound": ["hy2-in"],
+                "action": "sniff"
+            }
+        ]
+        ...
+    }
 }
 ```
 </details>

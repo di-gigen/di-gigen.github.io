@@ -38,7 +38,7 @@ Caddy的[安装](https://caddyserver.com/docs/install)过程不再赘述。原�
 在sing-box配置模板中我们使用了相对保守的BBR流控算法。要使用它，除了需要设定代理用户的`MY_USERNAME`和`MY_PASSWORD`，还需要按实际情况修改网站域名等信息、确保证书路径能够被sing-box正确索引，否则你需要让代理后端自签证书提供给Hysteria2。  
  
 <details>
-<summary><font color="#E02222">/etc/singbox/config.json(节选)</font></summary>
+<summary><font color="#E02222">/etc/singbox/config.json(节选, v1.12.x)</font></summary>
 
 ```json
 {

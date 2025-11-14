@@ -70,23 +70,19 @@ xcaddy build --with github.com/caddy-dns/cloudflare --with github.com/greenpau/c
 
 ```
 {
-    order coraza_waf first
-    order authenticate before respond
-    order authorize before basicauth
-    https_port 8443
-    admin off
-    acme_dns cloudflare MY_API_TOKEN
-    email my@email.com
     log {
         level error
         output file /log/path/sys.log
     }
-    dynamic_dns { 
-		provider cloudflare MY_API_TOKEN
-		dynamic_domains # Scan through the configured domains
-	}
+    admin off
+    https_port 8443
+    # 顺序执行http处理程序WAF和SSO
+    order coraza_waf first
+    order authenticate before respond
+    order authorize before basicauth
+    # SSO配置
     security {
-        local identity store localdb {
+        local identity store localdb { #使用本地json文件存储准入用户信息
             realm local
             path /etc/caddy/users.json
         }
@@ -95,7 +91,7 @@ xcaddy build --with github.com/caddy-dns/cloudflare --with github.com/greenpau/c
             crypto key sign-verify {env.JWT_SHARED_KEY}
             enable identity store localdb
             cookie domain mydomain.com
-            ui { # 统一登录门户收录地址
+            ui { # SSO门户页面编辑(添加准入资产)
                 links {
                     "Service1" https://sub1.mydomain.com:8443 icon "las la-server"
                     "Service2" https://sub2.mydomain.com:8443 icon "las la-server"
@@ -124,14 +120,23 @@ xcaddy build --with github.com/caddy-dns/cloudflare --with github.com/greenpau/c
             }
         }
     }
+    # 通配符证书签发配置
+    email my@email.com
+    acme_dns cloudflare MY_API_TOKEN
+    # 自动扫描Caddyfile中出现的域名并配置动态DNS
+    dynamic_dns { 
+		provider cloudflare MY_API_TOKEN
+		dynamic_domains
+	}
 }
 *.mydomain.com {
-    encode gzip zstd
     log {
         output file /etc/caddy/access.log 
         format console
     }
-    coraza_waf { # WAF使用OWASP规则集
+    encode gzip zstd
+    # 声明该域名接入WAF保护并配置生效的规则集
+    coraza_waf {
         load_owasp_crs
         directives `
             Include @coraza.conf-recommended
@@ -140,23 +145,26 @@ xcaddy build --with github.com/caddy-dns/cloudflare --with github.com/greenpau/c
             SecRuleEngine On
         `
     }
-    @auth host auth.mydomain.com # SSO门户网站
+    # SSO门户网站
+    @auth host auth.mydomain.com
     handle @auth {
         authenticate with myportal
     }
-    @service1 host sub1.mydomain.com # 内网服务1
+    # 内网服务1
+    @service1 host sub1.mydomain.com
     handle @sub1 {
         route {
-            authorize with users_policy # 接入SSO鉴权
+            authorize with users_policy # 声明该域名接入SSO鉴权
             reverse_proxy IP:PORT
         }
     }
-    @service2 host sub2.mydomain.com # 内网服务2
+    # 内网服务2
+    @service2 host sub2.mydomain.com
         handle @sub2 {
             reverse_proxy IP:PORT
         }
     handle {
-        abort # Fallback for otherwise unhandled domains
+        abort # 兜底回落配置:丢弃未匹配处理规则的请求
     }
 }
 ```

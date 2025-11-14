@@ -53,13 +53,13 @@ Caddy反代参数应匹配面板：
     }
 }
 blog.mydomain.com {
-    encode gzip zstd
-    tls
     log {
         output file /log/path/access.log
         format console
     }
-    reverse_proxy 127.0.0.1:8080 ## website 
+    tls
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:8080 # 网站Web服务
     reverse_proxy /mgmt/* 127.0.0.1:9090 { # cockpit
         transport http {
             tls_insecure_skip_verify

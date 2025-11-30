@@ -7,7 +7,7 @@ lede: 科学上网系列(その一)
 thumbnail: /img/caddy-sni-with-reality/122668460.jpg
 ---
 ## 前言  
-本文采用集成L4插件的Caddy负责入站SNI分流、sing-box容器作为vless+vision+reality协议组合的xray代理节点，旨在充分发挥Caddy自动签发证书的便利性与sing-box的代理协议配置多样性，为同时具有可靠代理和建站需求的服主提供更统一且灵活的部署思路。  
+本文采用集成L4插件的Caddy负责入站SNI分流、reality协议的xray代理节点，旨在充分发挥Caddy自动签发证书的便利性与v系代理协议配置灵活性，为同时具有可靠代理和建站需求的服主提供更统一且灵活的部署思路。  
 
 ## 准备  
 复现本文的操作实践依赖以下前提条件：  
@@ -21,20 +21,101 @@ thumbnail: /img/caddy-sni-with-reality/122668460.jpg
 * 关站或域名到期不影响代理  
 
 ## 安装及配置  
-### 以容器(podman)方式部署sing-box  
-podman是一种兼容docker镜像的容器管理工具，较新的科学上网工具通常不会提供各发行版的软件源，但基本都维护更新docker镜像。podman本身亦具备一键更新命令`podman auto-update`且支持自动化定期执行，适合无人值守环境。  
-要通过podman部署容器，首先需要安装它。在debian-based发行版中的安装命令是`sudo apt install podman`，之后使用高度类似`docker create`的语法部署容器:  
+### 以容器(podman)方式部署代理核心
+podman是一种兼容docker镜像的容器管理工具，较新的科学上网工具通常不会提供各发行版的软件源，但基本都维护更新docker镜像。podman本身亦具备一键更新命令`podman auto-update`且支持自动化定期执行，适合无人值守环境。  要通过podman部署容器，首先需要安装它。在debian-based发行版中的安装命令是`sudo apt install podman`，之后使用高度类似`docker create`的语法部署容器。
+此处提供xray和sing-box两种核心的完整服务端配置供您选择其一，实现在`7890`端口上监听xray的代理请求，协议组合为时下抗检测能力较强的vless+vision+reality，降低流量特征并伪造指向境外站点`download-porter.hoyoverse.com`的合规访问意图(即下载国际服原神)；具备简单的全局路由防呆(不响应目标地址为本地IP、大陆站点请求及一切bt下载)。  
+
+#### xray  
+容器安装命令：  
+```shell
+sudo podman create -it --name xray --restart=unless-stopped --label io.containers.autoupdate=image --network=host --volume /etc/xray:/etc/xray:z --volume /etc/caddy/data/certificates:/etc/ssl/private:z docker.io/teddysun/xray:latest
+sudo podman generate systemd --new --name xray > /etc/systemd/system/container-xray.service && sudo systemctl daemon-reload
+```
+
+服务端配置文件如下：  
+<details>
+<summary><font color="#E02222">/etc/xray/config.json</font></summary>
+
+```json
+{
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+           {
+               "type": "field",
+               "ip": ["geoip:private","geoip:cn"],
+               "outboundTag": "block"
+           },
+           {
+               "type": "field",
+               "domain": ["geosite:cn"],
+               "outboundTag": "block"
+           },
+           {
+               "type": "field",
+               "protocol": ["bittorrent"],
+               "outboundTag": "block"
+           }
+        ]
+    },
+    "inbounds": [
+        {
+            "tag": "real-in",
+            "listen": "127.0.0.1",
+            "port": 7890,
+            "protocol": "vless",
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http","tls","quic"]
+            },
+            "settings": {
+                "clients": [{
+                    "id": "MY_UUID",
+                    "flow": "xtls-rprx-vision"
+                }],
+                "fallbacks": [{"dest": 7891}],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "raw",
+                "security": "reality",
+                "realitySettings": {
+                    "target": "download-porter.hoyoverse.com:443",
+                    "serverNames": ["download-porter.hoyoverse.com"],
+                    "privateKey": "MY_PRIVATE_KEY",
+                    "shortIds": [""] 
+                }
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "direct",
+            "protocol": "freedom"
+        },
+        {
+            "tag": "block",
+            "protocol": "blackhole"
+        }
+    ],
+    "log": {
+        "access": "/path/to/access.log",
+        "error": "/path/to/error.log",
+        "loglevel": "error",
+        "dnsLog": true
+    }
+}
+```
+</details>
+
+#### singbox  
+容器安装命令：  
 ```shell
 sudo podman create -it --name singbox --restart=unless-stopped --label io.containers.autoupdate=image --network=host --volume /etc/singbox:/etc/sing-box:z --volume /path/to/caddy/certificates/:/etc/ssl/private:z ghcr.io/sagernet/sing-box:latest -D /var/lib/sing-box -C /etc/sing-box/ run
 sudo podman generate systemd --new --name singbox > /etc/systemd/system/container-singbox.service && sudo systemctl daemon-reload
 ```
 
-可以注意到我们在sing-box容器的推荐参数之外还添加了容器对宿主服务器证书路径`/path/to/caddy/certificates`的访问。这是因为sing-box在实现部分代理协议时可以复用现有证书，尽管对于reality来说并不是必须的。   
-
-### sing-box服务端配置  
-以下配置将实现在`7890`端口上监听xray的代理请求，协议组合为时下抗检测能力较强的vless+vision+reality，降低流量特征并伪造指向境外站点`download-porter.hoyoverse.com`的合规访问意图(即下载国际服原神)；具备简单的全局路由防呆(不响应目标地址为本地IP、大陆站点请求及一切bt下载)。  
-要使用该模板，您需要补全`MY_UUID`。此外服务端与客户端使用的密匙对`MY_PUBLIC_KEY`与`MY_PRIVATE_KEY`，可通过xray程序文件执行`xray x25519 [-i "(base64.RawURLEncoding)" --std-encoding ]`命令生成，这对于使用sing-box作为后端的我们是一个额外的小麻烦。  
-
+sing-box是一款锐意开发的通用代理平台，每次迭代引入新的功能特性都伴随着不同程度的[调整](https://sing-box.sagernet.org/zh/migration/)，如果您使用与本文不同版本请根据官方文档酌情修改：  
 <details>
 <summary><font color="#E02222">/etc/singbox/config.json (v1.12.x)</font></summary>
 
@@ -43,13 +124,13 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
     "log": {
         "disabled": false,
         "level": "error",
-        "output": "/your/log/path/box.log",
+        "output": "/path/to/error.log",
         "timestamp": true
     },
     "inbounds": [{
-        "tag": "v2-in",
+        "tag": "real-in",
         "type": "vless",
-        "listen": "::",
+        "listen": "127.0.0.1",
         "listen_port": 7890,
         "users": [{
             "uuid": "MY_UUID",
@@ -76,7 +157,7 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
     "route": {
         "rules": [
             {
-                "inbound": ["v2-in"],
+                "inbound": ["real-in"],
                 "action": "sniff"
             },
             {
@@ -85,20 +166,13 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
                 "rules": [
                     {"ip_is_private": true},
                     {"protocol": ["bittorrent"]},
-                    {"rule_set": ["geoip-cn","geosite-cn"]}
+                    {"rule_set": ["geosite-cn"]}
                 ],
                 "action": "reject"
             }
         ],
         "auto_detect_interface": true,
         "rule_set": [
-            {
-                "type": "remote",
-                "tag": "geoip-cn",
-                "format": "binary",
-                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/cn.srs",
-                "download_detour": "direct"
-            },
             {
                 "type": "remote",
                 "tag": "geosite-cn",
@@ -112,7 +186,9 @@ sudo podman generate systemd --new --name singbox > /etc/systemd/system/containe
 ```
 </details>
 
-若您使用不同的版本，请结合[官方文档](https://sing-box.sagernet.org/)酌情修改。需要预先创建容器外部路径的日志文件`/your/log/path/box.log`以避免初启动报错。  
+
+可以注意到我们在容器的推荐参数之外还添加了对宿主服务器证书路径`/path/to/caddy/certificates`的访问。这是因为实现部分代理协议时可以复用服务器上签发的证书，尽管对于reality来说并不是必须的。   
+要使用该模板，您需要补全`MY_UUID`、密匙对`MY_PUBLIC_KEY`与`MY_PRIVATE_KEY`(可通过xray二进制文件执行`xray x25519 [-i "(base64.RawURLEncoding)" --std-encoding ]`命令生成)，并预先创建容器外部路径的日志文件`/path/to/error.log`和`/path/to/access.log`以避免初启动报错。  
 
 ### 代理客户端配置
 因不同平台客户端配置方式各异，此处仅展示节点分享链。您需要补全与`config.json`文件中相同的`MY_UUID`、服务器的实际IP`MY_SERVER_IP`、与服务端 `MY_PRIVATE_KEY`成对的公钥`MY_PUBLIC_KEY`:  
@@ -177,7 +253,7 @@ sudo curl -o /etc/systemd/system/caddy.service https://raw.githubusercontent.com
 ```
 </details>
 
-需要注意的是，sing-box v1.6.0+移除了对Proxy_Protocol的支持，因此xray代理流量的l4路由不配置此参数。最后不要忘记创建配置文件中提到的系统日志`/log/path/sys.log`和访问日志`/log/path/access.log`。
+需要注意的是，sing-box v1.6.0+移除了对Proxy_Protocol的支持，因此xray代理流量的l4路由不配置此参数。最后不要忘记创建配置文件中提到的caddy系统日志`/log/path/sys.log`和访问日志`/log/path/access.log`。
 
 ### 性能调优  
 开启BBR拥塞缓解算法  
@@ -233,15 +309,12 @@ COMMIT
 校核配置文件无误后，启动Caddy与sing-box服务：  
 ```shell
 sudo systemctl enable --now caddy.service
-sudo systemctl enable --now container-singbox.service
+sudo systemctl enable --now container-xray.service # 或者是container-singbox.service
 ```
 
 ## 方案缺陷(?)
 #### dest质量
 在实践中您也许会注意到，由于伪装站服务器落地位置差异等因素，示例dest不一定是最合适的伪装对象，甚至有可能让自己的服务器成为其CDN反代加速节点。请参考[官方建议](https://github.com/XTLS/Xray-core/discussions/2256)及一些用户的[心得技巧](https://www.smallstep.one/article/reality-domain)评估您的伪装站点。  
-
-#### 保持学习  
-sing-box是一款锐意开发的通用代理平台，每次迭代引入新的功能特性都伴随着不同程度的[调整](https://sing-box.sagernet.org/zh/migration/)，您需要持续跟进了解以避免配置文件过时而失效(当然抛开这一点，反网路審查本身就需要这么做)，或者关闭podman自动更新。  
 
 #### Caddy更新缺乏便利性手段
 使用定制版Caddy意味着无法享受来自维护者推送的更新，作为Web服务的第一道安全关卡，这样会错过重要的安全补丁。您不得不频繁的去官网生成下载新的执行文件。优雅专业的解决方法是架设[自动化服务](https://ghcr.io/di-gigen/caddy)，同步拉取最新的代码按照自己的功能插件定制偏好定期编译。  
